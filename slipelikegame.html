@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slipe (スライプ) 風ゲーム</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        #status {
+            margin-bottom: 20px;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #555;
+            height: 1.5em;
+        }
+        .board {
+            display: grid;
+            grid-template-columns: repeat(5, 60px);
+            grid-template-rows: repeat(5, 60px);
+            gap: 5px;
+            background-color: #bbada0;
+            padding: 10px;
+            border-radius: 6px;
+            position: relative;
+        }
+        .cell {
+            width: 60px;
+            height: 60px;
+            background-color: #cdc1b4;
+            border-radius: 4px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+        /* 中央のゴールマス */
+        .cell[data-row="2"][data-col="2"] {
+            background-color: #e6c5a1;
+            border: 2px solid #dcb58b;
+        }
+        .cell[data-row="2"][data-col="2"]::after {
+            content: 'GOAL';
+            font-size: 10px;
+            color: #8f7a66;
+            opacity: 0.5;
+        }
+
+        .piece {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+            position: absolute;
+            z-index: 10;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            cursor: pointer;
+        }
+        /* プレイヤー1 (先攻: 下側) */
+        .piece.p1 {
+            background-color: #3498db; /* 青 */
+            border: 2px solid #2980b9;
+        }
+        /* プレイヤー2 (後攻: 上側) */
+        .piece.p2 {
+            background-color: #e74c3c; /* 赤 */
+            border: 2px solid #c0392b;
+        }
+        /* 印付きコマ（王様） */
+        .piece.king::before {
+            content: '★';
+            color: white;
+            font-size: 24px;
+        }
+        /* 選択中のコマ */
+        .piece.selected {
+            box-shadow: 0 0 10px 4px rgba(255, 255, 0, 0.8);
+            transform: scale(1.1);
+            z-index: 20;
+        }
+        /* 移動可能箇所のハイライト */
+        .hint {
+            width: 20px;
+            height: 20px;
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 50%;
+            position: absolute;
+            cursor: pointer;
+            z-index: 5;
+        }
+        .hint:hover {
+            background-color: rgba(0, 0, 0, 0.4);
+            transform: scale(1.2);
+        }
+        
+        #controls {
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #8f7a66;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #7f6a56;
+        }
+        .winner-p1 { color: #3498db !important; }
+        .winner-p2 { color: #e74c3c !important; }
+
+    </style>
+</head>
+<body>
+
+    <h1>Slipe-like Game</h1>
+    <div id="status">Player 1 (Blue) のターン</div>
+    
+    <div class="board" id="board">
+        </div>
+
+    <div id="controls">
+        <button onclick="resetGame()">リセット</button>
+    </div>
+
+    <script>
+        // 定数
+        const BOARD_SIZE = 5;
+        const P1 = 1; // 青
+        const P2 = 2; // 赤
+        
+        // 状態変数
+        let board = []; // 盤面の状態 (null, {player: P1, isKing: false}, ...)
+        let currentPlayer = P1;
+        let selectedPiece = null; // {r, c}
+        let isGameOver = false;
+
+        const boardEl = document.getElementById('board');
+        const statusEl = document.getElementById('status');
+
+        // ゲーム初期化
+        function initGame() {
+            // 盤面の初期化 (5x5)
+            board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
+
+            // 初期配置 (標準的な対面配置と仮定)
+            // P2 (赤) 上段
+            board[0][0] = { player: P2, isKing: false };
+            board[0][1] = { player: P2, isKing: false };
+            board[0][2] = { player: P2, isKing: true }; // 中央が王
+            board[0][3] = { player: P2, isKing: false };
+            board[0][4] = { player: P2, isKing: false };
+
+            // P1 (青) 下段
+            board[4][0] = { player: P1, isKing: false };
+            board[4][1] = { player: P1, isKing: false };
+            board[4][2] = { player: P1, isKing: true }; // 中央が王
+            board[4][3] = { player: P1, isKing: false };
+            board[4][4] = { player: P1, isKing: false };
+
+            currentPlayer = P1;
+            isGameOver = false;
+            selectedPiece = null;
+            updateStatus();
+            renderBoard();
+        }
+
+        // 盤面の描画
+        function renderBoard() {
+            boardEl.innerHTML = ''; // クリア
+
+            // セルとコマの描画
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    // 背景セルの描画
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    
+                    // クリックイベント（移動先選択用）
+                    // ヒントが表示されている場所をクリックした場合の処理は別途hint要素に行わせるが、
+                    // ここではシンプル化のため、移動ロジックはコマ選択 -> ヒントクリックの流れにする
+                    boardEl.appendChild(cell);
+
+                    // コマがある場合
+                    const pieceData = board[r][c];
+                    if (pieceData) {
+                        const piece = document.createElement('div');
+                        piece.className = `piece ${pieceData.player === P1 ? 'p1' : 'p2'} ${pieceData.isKing ? 'king' : ''}`;
+                        
+                        // 選択状態のスタイル
+                        if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
+                            piece.classList.add('selected');
+                        }
+
+                        // コマの位置を絶対配置で指定 (親のboardがrelative, gridの配置に合わせる)
+                        // grid-gap: 5px, cell: 60px -> 65px step + 10px padding
+                        const top = 10 + r * 65 + 5; // +5 for centering piece (60-50)/2
+                        const left = 10 + c * 65 + 5;
+                        piece.style.top = `${top}px`;
+                        piece.style.left = `${left}px`;
+
+                        // クリックイベント（コマ選択）
+                        piece.onclick = (e) => handlePieceClick(r, c);
+
+                        boardEl.appendChild(piece);
+                    }
+                }
+            }
+
+            // 移動可能な場所にヒントを表示
+            if (selectedPiece && !isGameOver) {
+                showHints(selectedPiece.r, selectedPiece.c);
+            }
+        }
+
+        // コマクリック時の処理
+        function handlePieceClick(r, c) {
+            if (isGameOver) return;
+
+            const piece = board[r][c];
+            // 自分のコマでなければ無視
+            if (!piece || piece.player !== currentPlayer) return;
+
+            // 既に選択されていれば解除、違えば選択
+            if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
+                selectedPiece = null;
+            } else {
+                selectedPiece = { r, c };
+            }
+            renderBoard();
+        }
+
+        // 有効な移動先を表示
+        function showHints(r, c) {
+            const directions = [
+                { dr: -1, dc: 0 }, // 上
+                { dr: 1, dc: 0 },  // 下
+                { dr: 0, dc: -1 }, // 左
+                { dr: 0, dc: 1 }   // 右
+            ];
+
+            directions.forEach(dir => {
+                const target = getSlideTarget(r, c, dir.dr, dir.dc);
+                // 移動先が現在地と異なるなら有効
+                if (target.r !== r || target.c !== c) {
+                    const hint = document.createElement('div');
+                    hint.className = 'hint';
+                    
+                    const top = 10 + target.r * 65 + 20; // +20 for centering hint (60-20)/2
+                    const left = 10 + target.c * 65 + 20;
+                    hint.style.top = `${top}px`;
+                    hint.style.left = `${left}px`;
+
+                    hint.onclick = () => movePiece(r, c, target.r, target.c);
+                    boardEl.appendChild(hint);
+                }
+            });
+        }
+
+        // 滑る動きの計算：壁か他のコマにぶつかる手前まで
+        function getSlideTarget(startR, startC, dr, dc) {
+            let r = startR;
+            let c = startC;
+
+            while (true) {
+                const nextR = r + dr;
+                const nextC = c + dc;
+
+                // 盤面外チェック
+                if (nextR < 0 || nextR >= BOARD_SIZE || nextC < 0 || nextC >= BOARD_SIZE) {
+                    break;
+                }
+                // 他のコマチェック
+                if (board[nextR][nextC] !== null) {
+                    break;
+                }
+
+                r = nextR;
+                c = nextC;
+            }
+
+            return { r, c };
+        }
+
+        // コマの移動実行
+        function movePiece(fromR, fromC, toR, toC) {
+            // データ更新
+            const piece = board[fromR][fromC];
+            board[toR][toC] = piece;
+            board[fromR][fromC] = null;
+            selectedPiece = null;
+
+            renderBoard();
+            
+            // 勝利判定チェック
+            if (piece.isKing && toR === 2 && toC === 2) {
+                isGameOver = true;
+                statusEl.innerHTML = `GAME SET! ${currentPlayer === P1 ? 'Player 1 (Blue)' : 'Player 2 (Red)'} WINS!`;
+                statusEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+                return;
+            }
+
+            // ターン交代
+            currentPlayer = currentPlayer === P1 ? P2 : P1;
+            updateStatus();
+        }
+
+        function updateStatus() {
+            if (isGameOver) return;
+            const pName = currentPlayer === P1 ? "Player 1 (Blue)" : "Player 2 (Red)";
+            statusEl.innerText = `${pName} のターン`;
+            statusEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+        }
+
+        function resetGame() {
+            initGame();
+        }
+
+        // 開始
+        initGame();
+
+    </script>
+</body>
+</html>
