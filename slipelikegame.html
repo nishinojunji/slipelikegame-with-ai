@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slipe vs Strong AI</title>
+    <title>Slipe vs Strong AI (Fixed)</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -40,6 +40,7 @@
             align-items: center;
             gap: 10px;
         }
+        /* 読み込み中アニメーション */
         .loading {
             display: none;
             width: 20px;
@@ -86,7 +87,7 @@
             width: 50px;
             height: 50px;
             border-radius: 50%;
-            transition: top 0.3s ease, left 0.3s ease; /* アニメーション調整 */
+            transition: top 0.3s ease, left 0.3s ease;
             position: absolute;
             z-index: 10;
             display: flex;
@@ -107,6 +108,7 @@
             transform: scale(1.1);
             z-index: 20;
         }
+        /* AI思考中は操作不能にする */
         .board.ai-thinking .piece,
         .board.ai-thinking .hint {
             cursor: default;
@@ -138,6 +140,8 @@
             border-radius: 4px;
         }
         button.reset-btn:hover { background-color: #7f6a56; }
+        button.reset-btn:active { background-color: #6e5a46; transform: translateY(1px); }
+
         .winner-p1 { color: #3498db !important; }
         .winner-p2 { color: #e74c3c !important; }
     </style>
@@ -168,7 +172,10 @@
         const BOARD_SIZE = 5;
         const P1 = 1; // 青 (Human)
         const P2 = 2; // 赤 (AI or Human)
-        const MAX_DEPTH = 4; // AIの読みの深さ（数値を上げると強くなるが遅くなる）
+        
+        // AIの強さ設定（深さ）。4は強いがスマホだと少し重い場合があるため、
+        // 動作が遅ければ3に変更してください。
+        const MAX_DEPTH = 4; 
 
         let board = [];
         let currentPlayer = P1;
@@ -176,6 +183,7 @@
         let isGameOver = false;
         let isAiMode = true;
         let isAiThinking = false;
+        let aiTimer = null; // AIの動作予約タイマー
 
         const boardEl = document.getElementById('board');
         const statusTextEl = document.getElementById('statusText');
@@ -183,6 +191,12 @@
         const modeSelectEl = document.getElementById('modeSelect');
 
         function initGame() {
+            // 既存のAIタイマーがあればキャンセル (リセット不具合の修正)
+            if (aiTimer) {
+                clearTimeout(aiTimer);
+                aiTimer = null;
+            }
+
             isAiMode = (modeSelectEl.value === 'ai');
             board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
 
@@ -205,6 +219,8 @@
             isGameOver = false;
             isAiThinking = false;
             selectedPiece = null;
+            
+            // クラス削除
             boardEl.classList.remove('ai-thinking');
             
             updateStatus();
@@ -252,6 +268,7 @@
 
             const piece = board[r][c];
             if (!piece || piece.player !== currentPlayer) return;
+            // AIモードでAIターンの場合、クリック無効
             if (isAiMode && currentPlayer === P2) return;
 
             if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
@@ -276,7 +293,6 @@
             });
         }
 
-        // コマの移動先を計算
         function getValidMovesForPiece(currentBoard, r, c) {
             const directions = [[-1,0], [1,0], [0,-1], [0,1]];
             const moves = [];
@@ -307,11 +323,9 @@
             return { r, c };
         }
 
-        // 移動実行（ターン処理含む）
         function performMove(fromR, fromC, toR, toC) {
             const piece = board[fromR][fromC];
             
-            // 状態更新
             board[toR][toC] = piece;
             board[fromR][fromC] = null;
             selectedPiece = null;
@@ -334,7 +348,9 @@
 
             // AIのターン発動
             if (isAiMode && currentPlayer === P2 && !isGameOver) {
-                setTimeout(startAiTurn, 100);
+                // タイマーで少し遅延させてAI思考開始 (UIブロック回避と演出)
+                // タイマーIDを保存してリセット時にキャンセルできるようにする
+                aiTimer = setTimeout(startAiTurn, 100);
             }
         }
 
@@ -362,14 +378,20 @@
         // ==========================================
 
         function startAiTurn() {
-            // UI描画のために少し遅延実行
+            // リセット直後やゲーム終了後に呼ばれた場合のガード
+            if (!isAiMode || currentPlayer !== P2 || isGameOver) return;
+
+            // setTimeout内で処理を分けることで描画更新を挟む
             setTimeout(() => {
                 const bestMove = getBestMove(board, P2);
+                
+                // 思考中にリセットされた場合のガード
+                if (!isAiMode || currentPlayer !== P2 || isGameOver) return;
+
                 if (bestMove) {
                     performMove(bestMove.fromR, bestMove.fromC, bestMove.toR, bestMove.toC);
                 } else {
-                    console.error("AI has no moves!");
-                    // 動ける手がない場合はパス（または負けだが、このゲームでは稀）
+                    // 万が一手がない場合 (パス)
                     currentPlayer = P1;
                     updateStatus();
                 }
@@ -377,41 +399,29 @@
         }
 
         function getBestMove(currentBoard, player) {
-            // 深さは固定値。3〜4手先まで読む
             const depth = MAX_DEPTH; 
             const result = minimax(currentBoard, depth, -Infinity, Infinity, true, player);
             return result.move;
         }
 
-        // Minimax関数
-        // isMaximizing: AIの手番ならtrue
         function minimax(boardState, depth, alpha, beta, isMaximizing, aiPlayer) {
             const opponent = aiPlayer === P1 ? P2 : P1;
             
-            // 1. 終了判定（勝利/敗北）の評価
-            // 直前の手でゲームが終わったかチェックしたいが、boardStateには勝敗フラグがないため
-            // 盤面を見て判定する。
-            
-            // 王様がゴールにいるか？
-            // ただし、「直前の手で決着がついた」ことを評価する必要がある。
-            // 呼び出し元の手で王様がゴールに着地していれば、それは無限大のスコア。
             const winner = checkWinner(boardState);
             if (winner !== null) {
-                if (winner === aiPlayer) return { score: 10000 + depth }; // 早く勝つほうが偉い
-                if (winner === opponent) return { score: -10000 - depth }; // 早く負けるのは最悪
+                // 深さが浅い(早いターン数で勝つ)ほど高評価
+                if (winner === aiPlayer) return { score: 10000 + depth };
+                if (winner === opponent) return { score: -10000 - depth };
             }
 
-            // 2. 深さ制限到達
             if (depth === 0) {
                 return { score: evaluateBoard(boardState, aiPlayer) };
             }
 
-            // 3. 全ての手を列挙
             const currentPlayerForNode = isMaximizing ? aiPlayer : opponent;
             const allMoves = getAllMoves(boardState, currentPlayerForNode);
 
             if (allMoves.length === 0) {
-                // 手がない場合（ステイルメイト等）、とりあえず現在の評価値を返す
                 return { score: evaluateBoard(boardState, aiPlayer) };
             }
 
@@ -420,8 +430,6 @@
             if (isMaximizing) {
                 let maxEval = -Infinity;
                 for (let move of allMoves) {
-                    // 手を仮実行（盤面をコピーせず戻す方式で高速化してもいいが、5x5ならコピーでもOK）
-                    // ここではシンプルにディープコピーを使う
                     const nextBoard = cloneBoard(boardState);
                     applyMoveOnBoard(nextBoard, move);
 
@@ -432,7 +440,7 @@
                         bestMove = move;
                     }
                     alpha = Math.max(alpha, evalResult.score);
-                    if (beta <= alpha) break; // Pruning
+                    if (beta <= alpha) break;
                 }
                 return { score: maxEval, move: bestMove };
             } else {
@@ -448,56 +456,50 @@
                         bestMove = move;
                     }
                     beta = Math.min(beta, evalResult.score);
-                    if (beta <= alpha) break; // Pruning
+                    if (beta <= alpha) break;
                 }
                 return { score: minEval, move: bestMove };
             }
         }
 
-        // 盤面の評価関数（ヒューリスティック）
         function evaluateBoard(boardState, aiPlayer) {
             let score = 0;
             const opponent = aiPlayer === P1 ? P2 : P1;
             let aiKingPos = null;
             let opKingPos = null;
 
-            // 盤面走査
             for (let r = 0; r < BOARD_SIZE; r++) {
                 for (let c = 0; c < BOARD_SIZE; c++) {
                     const p = boardState[r][c];
                     if (!p) continue;
 
-                    // 王様の位置特定
                     if (p.isKing) {
                         if (p.player === aiPlayer) aiKingPos = {r, c};
                         else opKingPos = {r, c};
                     }
 
-                    // 中央付近の支配（単純に中央に近いほど加点）
-                    // マンハッタン距離: |r-2| + |c-2|
+                    // 中央付近の支配
                     const distToCenter = Math.abs(r - 2) + Math.abs(c - 2);
-                    const posScore = (4 - distToCenter); // 中央(2,2)=4点, 端=0~2点
+                    const posScore = (4 - distToCenter); 
 
-                    if (p.player === aiPlayer) score += posScore * 1;
-                    else score -= posScore * 1;
+                    if (p.player === aiPlayer) score += posScore * 2;
+                    else score -= posScore * 2;
                 }
             }
 
-            // 王様の距離による評価（非常に重要）
-            // 王様はゴール(2,2)に近いほど良い
+            // 王様とゴールの距離 (最重要)
             if (aiKingPos) {
                 const dist = Math.abs(aiKingPos.r - 2) + Math.abs(aiKingPos.c - 2);
-                score += (10 - dist) * 10; // 距離が近いほど高得点
+                score += (10 - dist) * 20; 
             }
             if (opKingPos) {
                 const dist = Math.abs(opKingPos.r - 2) + Math.abs(opKingPos.c - 2);
-                score -= (10 - dist) * 10; // 相手が近いほど減点
+                score -= (10 - dist) * 20; 
             }
 
             return score;
         }
 
-        // ヘルパー: 勝者チェック
         function checkWinner(boardState) {
             const center = boardState[2][2];
             if (center && center.isKing) {
@@ -506,7 +508,6 @@
             return null;
         }
 
-        // ヘルパー: 全合法手を取得
         function getAllMoves(boardState, player) {
             let moves = [];
             for (let r = 0; r < BOARD_SIZE; r++) {
@@ -517,24 +518,26 @@
                     }
                 }
             }
-            // ランダム性を出すためにシャッフル（同点の手がある場合のため）
+            // ランダム性 (同点の場合のバラつき)
             moves.sort(() => Math.random() - 0.5);
             return moves;
         }
 
-        // ヘルパー: 盤面コピー
         function cloneBoard(source) {
             return source.map(row => row.map(cell => cell ? {...cell} : null));
         }
 
-        // ヘルパー: 仮想盤面上で移動適用
         function applyMoveOnBoard(boardState, move) {
             const piece = boardState[move.fromR][move.fromC];
             boardState[move.toR][move.toC] = piece;
             boardState[move.fromR][move.fromC] = null;
         }
 
-        // 初期化
+        function resetGame() {
+            initGame();
+        }
+
+        // 開始
         initGame();
 
     </script>
