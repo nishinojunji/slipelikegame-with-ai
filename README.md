@@ -21,3 +21,15 @@ https://github.com/nishinojunji/slipelikegame-with-ai/tree/adc9f4a4c247b964edc42
 https://github.com/nishinojunji/slipelikegame-with-ai/tree/1628f165a78b9f63c1138669e9463cfe66cf9065
 
 合計４行でできました
+
+## リセットして再開できないバグ発見
+
+> リセットして開始が動かない。直して
+
+-gemini
+申し訳ありません。AIの思考開始待ちのタイマー処理とリセット処理がかち合ってしまい、リセットボタンを押しても、直前に予約されていたAIの動作が実行されてしまう（またはエラーになる）バグがありました。
+AIの待機時間をキャンセルする処理を追加し、正しくリセットできるように修正しました。 また、AIの読みの深さを調整して、ブラウザが固まりにくく、かつ十分強い設定にしています。
+
+https://github.com/nishinojunji/slipelikegame-with-ai/tree/2e8014f208fe8d200c43d7b0c0b153162158e846
+
+治った
