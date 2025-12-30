@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slipe (スライプ) 風ゲーム</title>
+    <title>Slipe vs AI</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -13,18 +13,45 @@
             background-color: #f0f0f0;
             margin: 0;
             padding: 20px;
+            user-select: none; /* テキスト選択防止 */
         }
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
+        h1 { color: #333; margin-bottom: 5px; }
+        
+        /* コントロールパネル */
+        .controls-top {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
+        select {
+            padding: 8px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
         #status {
             margin-bottom: 20px;
             font-size: 1.2em;
             font-weight: bold;
             color: #555;
             height: 1.5em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
+        .loading {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #ccc;
+            border-top: 3px solid #333;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
         .board {
             display: grid;
             grid-template-columns: repeat(5, 60px);
@@ -43,9 +70,8 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            position: relative;
         }
-        /* 中央のゴールマス */
+        /* ゴールマス */
         .cell[data-row="2"][data-col="2"] {
             background-color: #e6c5a1;
             border: 2px solid #dcb58b;
@@ -70,29 +96,25 @@
             box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
             cursor: pointer;
         }
-        /* プレイヤー1 (先攻: 下側) */
-        .piece.p1 {
-            background-color: #3498db; /* 青 */
-            border: 2px solid #2980b9;
-        }
-        /* プレイヤー2 (後攻: 上側) */
-        .piece.p2 {
-            background-color: #e74c3c; /* 赤 */
-            border: 2px solid #c0392b;
-        }
-        /* 印付きコマ（王様） */
+        .piece.p1 { background-color: #3498db; border: 2px solid #2980b9; }
+        .piece.p2 { background-color: #e74c3c; border: 2px solid #c0392b; }
         .piece.king::before {
             content: '★';
             color: white;
             font-size: 24px;
         }
-        /* 選択中のコマ */
         .piece.selected {
             box-shadow: 0 0 10px 4px rgba(255, 255, 0, 0.8);
             transform: scale(1.1);
             z-index: 20;
         }
-        /* 移動可能箇所のハイライト */
+        /* AI思考中のカーソル無効化 */
+        .board.ai-thinking .piece,
+        .board.ai-thinking .hint {
+            cursor: default;
+            pointer-events: none;
+        }
+
         .hint {
             width: 20px;
             height: 20px;
@@ -107,10 +129,8 @@
             transform: scale(1.2);
         }
         
-        #controls {
+        button.reset-btn {
             margin-top: 20px;
-        }
-        button {
             padding: 10px 20px;
             font-size: 16px;
             cursor: pointer;
@@ -119,127 +139,126 @@
             border: none;
             border-radius: 4px;
         }
-        button:hover {
-            background-color: #7f6a56;
-        }
+        button.reset-btn:hover { background-color: #7f6a56; }
         .winner-p1 { color: #3498db !important; }
         .winner-p2 { color: #e74c3c !important; }
-
     </style>
 </head>
 <body>
 
-    <h1>Slipe-like Game</h1>
-    <div id="status">Player 1 (Blue) のターン</div>
+    <h1>Slipe vs AI</h1>
+    
+    <div class="controls-top">
+        <label for="modeSelect">モード:</label>
+        <select id="modeSelect" onchange="resetGame()">
+            <option value="ai">1人プレイ (vs CPU)</option>
+            <option value="human">2人プレイ (対人戦)</option>
+        </select>
+    </div>
+
+    <div id="status">
+        <span id="statusText">Player 1 (Blue) のターン</span>
+        <div class="loading" id="aiLoading"></div>
+    </div>
     
     <div class="board" id="board">
         </div>
 
-    <div id="controls">
-        <button onclick="resetGame()">リセット</button>
-    </div>
+    <button class="reset-btn" onclick="resetGame()">リセットして開始</button>
 
     <script>
-        // 定数
         const BOARD_SIZE = 5;
-        const P1 = 1; // 青
-        const P2 = 2; // 赤
+        const P1 = 1; // 青 (Human)
+        const P2 = 2; // 赤 (AI or Human)
         
-        // 状態変数
-        let board = []; // 盤面の状態 (null, {player: P1, isKing: false}, ...)
+        let board = [];
         let currentPlayer = P1;
-        let selectedPiece = null; // {r, c}
+        let selectedPiece = null;
         let isGameOver = false;
+        let isAiMode = true; // AIモードかどうか
+        let isAiThinking = false; // AI思考中フラグ
 
         const boardEl = document.getElementById('board');
-        const statusEl = document.getElementById('status');
+        const statusTextEl = document.getElementById('statusText');
+        const aiLoadingEl = document.getElementById('aiLoading');
+        const modeSelectEl = document.getElementById('modeSelect');
 
         // ゲーム初期化
         function initGame() {
-            // 盤面の初期化 (5x5)
+            isAiMode = (modeSelectEl.value === 'ai');
             board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
 
-            // 初期配置 (標準的な対面配置と仮定)
+            // 初期配置
             // P2 (赤) 上段
             board[0][0] = { player: P2, isKing: false };
             board[0][1] = { player: P2, isKing: false };
-            board[0][2] = { player: P2, isKing: true }; // 中央が王
+            board[0][2] = { player: P2, isKing: true }; 
             board[0][3] = { player: P2, isKing: false };
             board[0][4] = { player: P2, isKing: false };
 
             // P1 (青) 下段
             board[4][0] = { player: P1, isKing: false };
             board[4][1] = { player: P1, isKing: false };
-            board[4][2] = { player: P1, isKing: true }; // 中央が王
+            board[4][2] = { player: P1, isKing: true }; 
             board[4][3] = { player: P1, isKing: false };
             board[4][4] = { player: P1, isKing: false };
 
             currentPlayer = P1;
             isGameOver = false;
+            isAiThinking = false;
             selectedPiece = null;
+            boardEl.classList.remove('ai-thinking');
+            
             updateStatus();
             renderBoard();
         }
 
-        // 盤面の描画
+        // 盤面描画
         function renderBoard() {
-            boardEl.innerHTML = ''; // クリア
+            boardEl.innerHTML = ''; 
 
-            // セルとコマの描画
             for (let r = 0; r < BOARD_SIZE; r++) {
                 for (let c = 0; c < BOARD_SIZE; c++) {
-                    // 背景セルの描画
                     const cell = document.createElement('div');
                     cell.className = 'cell';
                     cell.dataset.row = r;
                     cell.dataset.col = c;
-                    
-                    // クリックイベント（移動先選択用）
-                    // ヒントが表示されている場所をクリックした場合の処理は別途hint要素に行わせるが、
-                    // ここではシンプル化のため、移動ロジックはコマ選択 -> ヒントクリックの流れにする
                     boardEl.appendChild(cell);
 
-                    // コマがある場合
                     const pieceData = board[r][c];
                     if (pieceData) {
                         const piece = document.createElement('div');
                         piece.className = `piece ${pieceData.player === P1 ? 'p1' : 'p2'} ${pieceData.isKing ? 'king' : ''}`;
                         
-                        // 選択状態のスタイル
                         if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
                             piece.classList.add('selected');
                         }
 
-                        // コマの位置を絶対配置で指定 (親のboardがrelative, gridの配置に合わせる)
-                        // grid-gap: 5px, cell: 60px -> 65px step + 10px padding
-                        const top = 10 + r * 65 + 5; // +5 for centering piece (60-50)/2
+                        const top = 10 + r * 65 + 5;
                         const left = 10 + c * 65 + 5;
                         piece.style.top = `${top}px`;
                         piece.style.left = `${left}px`;
 
-                        // クリックイベント（コマ選択）
-                        piece.onclick = (e) => handlePieceClick(r, c);
-
+                        piece.onclick = () => handlePieceClick(r, c);
                         boardEl.appendChild(piece);
                     }
                 }
             }
 
-            // 移動可能な場所にヒントを表示
-            if (selectedPiece && !isGameOver) {
+            if (selectedPiece && !isGameOver && !isAiThinking) {
                 showHints(selectedPiece.r, selectedPiece.c);
             }
         }
 
-        // コマクリック時の処理
         function handlePieceClick(r, c) {
-            if (isGameOver) return;
+            if (isGameOver || isAiThinking) return;
 
             const piece = board[r][c];
-            // 自分のコマでなければ無視
             if (!piece || piece.player !== currentPlayer) return;
 
-            // 既に選択されていれば解除、違えば選択
+            // AIモードでAIのターンの場合、クリック無効（念のため）
+            if (isAiMode && currentPlayer === P2) return;
+
             if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
                 selectedPiece = null;
             } else {
@@ -248,86 +267,155 @@
             renderBoard();
         }
 
-        // 有効な移動先を表示
         function showHints(r, c) {
-            const directions = [
-                { dr: -1, dc: 0 }, // 上
-                { dr: 1, dc: 0 },  // 下
-                { dr: 0, dc: -1 }, // 左
-                { dr: 0, dc: 1 }   // 右
-            ];
-
-            directions.forEach(dir => {
-                const target = getSlideTarget(r, c, dir.dr, dir.dc);
-                // 移動先が現在地と異なるなら有効
-                if (target.r !== r || target.c !== c) {
-                    const hint = document.createElement('div');
-                    hint.className = 'hint';
-                    
-                    const top = 10 + target.r * 65 + 20; // +20 for centering hint (60-20)/2
-                    const left = 10 + target.c * 65 + 20;
-                    hint.style.top = `${top}px`;
-                    hint.style.left = `${left}px`;
-
-                    hint.onclick = () => movePiece(r, c, target.r, target.c);
-                    boardEl.appendChild(hint);
-                }
+            const moves = getValidMovesForPiece(r, c);
+            moves.forEach(move => {
+                const hint = document.createElement('div');
+                hint.className = 'hint';
+                const top = 10 + move.toR * 65 + 20;
+                const left = 10 + move.toC * 65 + 20;
+                hint.style.top = `${top}px`;
+                hint.style.left = `${left}px`;
+                hint.onclick = () => movePiece(r, c, move.toR, move.toC);
+                boardEl.appendChild(hint);
             });
         }
 
-        // 滑る動きの計算：壁か他のコマにぶつかる手前まで
+        // 指定したコマの移動先を計算
+        function getValidMovesForPiece(r, c) {
+            const directions = [[-1,0], [1,0], [0,-1], [0,1]];
+            const moves = [];
+            
+            directions.forEach(dir => {
+                const target = getSlideTarget(r, c, dir[0], dir[1]);
+                if (target.r !== r || target.c !== c) {
+                    moves.push({
+                        fromR: r, fromC: c,
+                        toR: target.r, toC: target.c,
+                        isWin: (board[r][c].isKing && target.r === 2 && target.c === 2)
+                    });
+                }
+            });
+            return moves;
+        }
+
         function getSlideTarget(startR, startC, dr, dc) {
             let r = startR;
             let c = startC;
-
             while (true) {
                 const nextR = r + dr;
                 const nextC = c + dc;
-
-                // 盤面外チェック
-                if (nextR < 0 || nextR >= BOARD_SIZE || nextC < 0 || nextC >= BOARD_SIZE) {
-                    break;
-                }
-                // 他のコマチェック
-                if (board[nextR][nextC] !== null) {
-                    break;
-                }
-
+                if (nextR < 0 || nextR >= BOARD_SIZE || nextC < 0 || nextC >= BOARD_SIZE) break;
+                if (board[nextR][nextC] !== null) break;
                 r = nextR;
                 c = nextC;
             }
-
             return { r, c };
         }
 
-        // コマの移動実行
         function movePiece(fromR, fromC, toR, toC) {
-            // データ更新
             const piece = board[fromR][fromC];
             board[toR][toC] = piece;
             board[fromR][fromC] = null;
             selectedPiece = null;
 
-            renderBoard();
-            
-            // 勝利判定チェック
+            // 勝利判定
             if (piece.isKing && toR === 2 && toC === 2) {
+                renderBoard();
                 isGameOver = true;
-                statusEl.innerHTML = `GAME SET! ${currentPlayer === P1 ? 'Player 1 (Blue)' : 'Player 2 (Red)'} WINS!`;
-                statusEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+                const pName = currentPlayer === P1 ? "Player 1 (Blue)" : "Player 2 (Red)";
+                statusTextEl.innerText = `GAME SET! ${pName} WINS!`;
+                statusTextEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+                aiLoadingEl.style.display = 'none';
                 return;
             }
 
             // ターン交代
             currentPlayer = currentPlayer === P1 ? P2 : P1;
+            renderBoard();
             updateStatus();
+
+            // AIターン処理
+            if (isAiMode && currentPlayer === P2 && !isGameOver) {
+                startAiTurn();
+            }
         }
 
         function updateStatus() {
             if (isGameOver) return;
-            const pName = currentPlayer === P1 ? "Player 1 (Blue)" : "Player 2 (Red)";
-            statusEl.innerText = `${pName} のターン`;
-            statusEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+            const isAiTurn = (isAiMode && currentPlayer === P2);
+            const pName = currentPlayer === P1 ? "Player 1 (Blue)" : (isAiMode ? "CPU (Red)" : "Player 2 (Red)");
+            
+            statusTextEl.innerText = `${pName} のターン`;
+            statusTextEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
+            
+            if (isAiTurn) {
+                aiLoadingEl.style.display = 'block';
+                boardEl.classList.add('ai-thinking');
+                isAiThinking = true;
+            } else {
+                aiLoadingEl.style.display = 'none';
+                boardEl.classList.remove('ai-thinking');
+                isAiThinking = false;
+            }
+        }
+
+        // --- AI Logic ---
+
+        function startAiTurn() {
+            // 少し待ってから動かす（人間らしく見せるため）
+            setTimeout(() => {
+                makeAiMove();
+            }, 600);
+        }
+
+        function makeAiMove() {
+            if (isGameOver) return;
+
+            // 1. 全コマの全移動可能パターンを列挙
+            let allMoves = [];
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const p = board[r][c];
+                    if (p && p.player === P2) { // AIのコマ
+                        const moves = getValidMovesForPiece(r, c);
+                        allMoves = allMoves.concat(moves);
+                    }
+                }
+            }
+
+            if (allMoves.length === 0) {
+                // 動ける場所がない（基本ありえないがパス扱い）
+                currentPlayer = P1;
+                updateStatus();
+                return;
+            }
+
+            // 2. 最善手を選ぶ
+            // 優先度A: 即勝利できる手
+            const winningMoves = allMoves.filter(m => m.isWin);
+            if (winningMoves.length > 0) {
+                const m = winningMoves[0];
+                movePiece(m.fromR, m.fromC, m.toR, m.toC);
+                return;
+            }
+
+            // 優先度B: 王様を動かす手（少し優先的に選ぶことでゲームを進める）
+            // かつ、ゴールに近い（マンハッタン距離が小さくなる）手を評価してもいいが、
+            // ここではシンプルに「王様が動けるなら50%の確率で王様の手を優先」くらいにする
+            const kingMoves = allMoves.filter(m => board[m.fromR][m.fromC].isKing);
+            
+            let selectedMove = null;
+
+            // 50%の確率で王様の移動を優先（ただし自殺手になるリスクまではチェックしていない簡易AI）
+            if (kingMoves.length > 0 && Math.random() < 0.5) {
+                selectedMove = kingMoves[Math.floor(Math.random() * kingMoves.length)];
+            } else {
+                // 完全ランダム
+                selectedMove = allMoves[Math.floor(Math.random() * allMoves.length)];
+            }
+
+            movePiece(selectedMove.fromR, selectedMove.fromC, selectedMove.toR, selectedMove.toC);
         }
 
         function resetGame() {
