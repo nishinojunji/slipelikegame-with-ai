@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slipe vs AI</title>
+    <title>Slipe vs Strong AI</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -13,11 +13,10 @@
             background-color: #f0f0f0;
             margin: 0;
             padding: 20px;
-            user-select: none; /* テキスト選択防止 */
+            user-select: none;
         }
         h1 { color: #333; margin-bottom: 5px; }
         
-        /* コントロールパネル */
         .controls-top {
             margin-bottom: 15px;
             display: flex;
@@ -87,7 +86,7 @@
             width: 50px;
             height: 50px;
             border-radius: 50%;
-            transition: all 0.3s ease;
+            transition: top 0.3s ease, left 0.3s ease; /* アニメーション調整 */
             position: absolute;
             z-index: 10;
             display: flex;
@@ -108,7 +107,6 @@
             transform: scale(1.1);
             z-index: 20;
         }
-        /* AI思考中のカーソル無効化 */
         .board.ai-thinking .piece,
         .board.ai-thinking .hint {
             cursor: default;
@@ -146,7 +144,7 @@
 </head>
 <body>
 
-    <h1>Slipe vs AI</h1>
+    <h1>Slipe vs Strong AI</h1>
     
     <div class="controls-top">
         <label for="modeSelect">モード:</label>
@@ -170,20 +168,20 @@
         const BOARD_SIZE = 5;
         const P1 = 1; // 青 (Human)
         const P2 = 2; // 赤 (AI or Human)
-        
+        const MAX_DEPTH = 4; // AIの読みの深さ（数値を上げると強くなるが遅くなる）
+
         let board = [];
         let currentPlayer = P1;
         let selectedPiece = null;
         let isGameOver = false;
-        let isAiMode = true; // AIモードかどうか
-        let isAiThinking = false; // AI思考中フラグ
+        let isAiMode = true;
+        let isAiThinking = false;
 
         const boardEl = document.getElementById('board');
         const statusTextEl = document.getElementById('statusText');
         const aiLoadingEl = document.getElementById('aiLoading');
         const modeSelectEl = document.getElementById('modeSelect');
 
-        // ゲーム初期化
         function initGame() {
             isAiMode = (modeSelectEl.value === 'ai');
             board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
@@ -213,7 +211,6 @@
             renderBoard();
         }
 
-        // 盤面描画
         function renderBoard() {
             boardEl.innerHTML = ''; 
 
@@ -255,8 +252,6 @@
 
             const piece = board[r][c];
             if (!piece || piece.player !== currentPlayer) return;
-
-            // AIモードでAIのターンの場合、クリック無効（念のため）
             if (isAiMode && currentPlayer === P2) return;
 
             if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
@@ -268,7 +263,7 @@
         }
 
         function showHints(r, c) {
-            const moves = getValidMovesForPiece(r, c);
+            const moves = getValidMovesForPiece(board, r, c);
             moves.forEach(move => {
                 const hint = document.createElement('div');
                 hint.className = 'hint';
@@ -276,45 +271,47 @@
                 const left = 10 + move.toC * 65 + 20;
                 hint.style.top = `${top}px`;
                 hint.style.left = `${left}px`;
-                hint.onclick = () => movePiece(r, c, move.toR, move.toC);
+                hint.onclick = () => performMove(move.fromR, move.fromC, move.toR, move.toC);
                 boardEl.appendChild(hint);
             });
         }
 
-        // 指定したコマの移動先を計算
-        function getValidMovesForPiece(r, c) {
+        // コマの移動先を計算
+        function getValidMovesForPiece(currentBoard, r, c) {
             const directions = [[-1,0], [1,0], [0,-1], [0,1]];
             const moves = [];
             
             directions.forEach(dir => {
-                const target = getSlideTarget(r, c, dir[0], dir[1]);
+                const target = getSlideTarget(currentBoard, r, c, dir[0], dir[1]);
                 if (target.r !== r || target.c !== c) {
                     moves.push({
                         fromR: r, fromC: c,
-                        toR: target.r, toC: target.c,
-                        isWin: (board[r][c].isKing && target.r === 2 && target.c === 2)
+                        toR: target.r, toC: target.c
                     });
                 }
             });
             return moves;
         }
 
-        function getSlideTarget(startR, startC, dr, dc) {
+        function getSlideTarget(currentBoard, startR, startC, dr, dc) {
             let r = startR;
             let c = startC;
             while (true) {
                 const nextR = r + dr;
                 const nextC = c + dc;
                 if (nextR < 0 || nextR >= BOARD_SIZE || nextC < 0 || nextC >= BOARD_SIZE) break;
-                if (board[nextR][nextC] !== null) break;
+                if (currentBoard[nextR][nextC] !== null) break;
                 r = nextR;
                 c = nextC;
             }
             return { r, c };
         }
 
-        function movePiece(fromR, fromC, toR, toC) {
+        // 移動実行（ターン処理含む）
+        function performMove(fromR, fromC, toR, toC) {
             const piece = board[fromR][fromC];
+            
+            // 状態更新
             board[toR][toC] = piece;
             board[fromR][fromC] = null;
             selectedPiece = null;
@@ -335,9 +332,9 @@
             renderBoard();
             updateStatus();
 
-            // AIターン処理
+            // AIのターン発動
             if (isAiMode && currentPlayer === P2 && !isGameOver) {
-                startAiTurn();
+                setTimeout(startAiTurn, 100);
             }
         }
 
@@ -360,69 +357,184 @@
             }
         }
 
-        // --- AI Logic ---
+        // ==========================================
+        //  AI Logic (Minimax with Alpha-Beta Pruning)
+        // ==========================================
 
         function startAiTurn() {
-            // 少し待ってから動かす（人間らしく見せるため）
+            // UI描画のために少し遅延実行
             setTimeout(() => {
-                makeAiMove();
-            }, 600);
+                const bestMove = getBestMove(board, P2);
+                if (bestMove) {
+                    performMove(bestMove.fromR, bestMove.fromC, bestMove.toR, bestMove.toC);
+                } else {
+                    console.error("AI has no moves!");
+                    // 動ける手がない場合はパス（または負けだが、このゲームでは稀）
+                    currentPlayer = P1;
+                    updateStatus();
+                }
+            }, 50);
         }
 
-        function makeAiMove() {
-            if (isGameOver) return;
+        function getBestMove(currentBoard, player) {
+            // 深さは固定値。3〜4手先まで読む
+            const depth = MAX_DEPTH; 
+            const result = minimax(currentBoard, depth, -Infinity, Infinity, true, player);
+            return result.move;
+        }
 
-            // 1. 全コマの全移動可能パターンを列挙
-            let allMoves = [];
+        // Minimax関数
+        // isMaximizing: AIの手番ならtrue
+        function minimax(boardState, depth, alpha, beta, isMaximizing, aiPlayer) {
+            const opponent = aiPlayer === P1 ? P2 : P1;
+            
+            // 1. 終了判定（勝利/敗北）の評価
+            // 直前の手でゲームが終わったかチェックしたいが、boardStateには勝敗フラグがないため
+            // 盤面を見て判定する。
+            
+            // 王様がゴールにいるか？
+            // ただし、「直前の手で決着がついた」ことを評価する必要がある。
+            // 呼び出し元の手で王様がゴールに着地していれば、それは無限大のスコア。
+            const winner = checkWinner(boardState);
+            if (winner !== null) {
+                if (winner === aiPlayer) return { score: 10000 + depth }; // 早く勝つほうが偉い
+                if (winner === opponent) return { score: -10000 - depth }; // 早く負けるのは最悪
+            }
+
+            // 2. 深さ制限到達
+            if (depth === 0) {
+                return { score: evaluateBoard(boardState, aiPlayer) };
+            }
+
+            // 3. 全ての手を列挙
+            const currentPlayerForNode = isMaximizing ? aiPlayer : opponent;
+            const allMoves = getAllMoves(boardState, currentPlayerForNode);
+
+            if (allMoves.length === 0) {
+                // 手がない場合（ステイルメイト等）、とりあえず現在の評価値を返す
+                return { score: evaluateBoard(boardState, aiPlayer) };
+            }
+
+            let bestMove = null;
+
+            if (isMaximizing) {
+                let maxEval = -Infinity;
+                for (let move of allMoves) {
+                    // 手を仮実行（盤面をコピーせず戻す方式で高速化してもいいが、5x5ならコピーでもOK）
+                    // ここではシンプルにディープコピーを使う
+                    const nextBoard = cloneBoard(boardState);
+                    applyMoveOnBoard(nextBoard, move);
+
+                    const evalResult = minimax(nextBoard, depth - 1, alpha, beta, false, aiPlayer);
+                    
+                    if (evalResult.score > maxEval) {
+                        maxEval = evalResult.score;
+                        bestMove = move;
+                    }
+                    alpha = Math.max(alpha, evalResult.score);
+                    if (beta <= alpha) break; // Pruning
+                }
+                return { score: maxEval, move: bestMove };
+            } else {
+                let minEval = Infinity;
+                for (let move of allMoves) {
+                    const nextBoard = cloneBoard(boardState);
+                    applyMoveOnBoard(nextBoard, move);
+
+                    const evalResult = minimax(nextBoard, depth - 1, alpha, beta, true, aiPlayer);
+                    
+                    if (evalResult.score < minEval) {
+                        minEval = evalResult.score;
+                        bestMove = move;
+                    }
+                    beta = Math.min(beta, evalResult.score);
+                    if (beta <= alpha) break; // Pruning
+                }
+                return { score: minEval, move: bestMove };
+            }
+        }
+
+        // 盤面の評価関数（ヒューリスティック）
+        function evaluateBoard(boardState, aiPlayer) {
+            let score = 0;
+            const opponent = aiPlayer === P1 ? P2 : P1;
+            let aiKingPos = null;
+            let opKingPos = null;
+
+            // 盤面走査
             for (let r = 0; r < BOARD_SIZE; r++) {
                 for (let c = 0; c < BOARD_SIZE; c++) {
-                    const p = board[r][c];
-                    if (p && p.player === P2) { // AIのコマ
-                        const moves = getValidMovesForPiece(r, c);
-                        allMoves = allMoves.concat(moves);
+                    const p = boardState[r][c];
+                    if (!p) continue;
+
+                    // 王様の位置特定
+                    if (p.isKing) {
+                        if (p.player === aiPlayer) aiKingPos = {r, c};
+                        else opKingPos = {r, c};
                     }
+
+                    // 中央付近の支配（単純に中央に近いほど加点）
+                    // マンハッタン距離: |r-2| + |c-2|
+                    const distToCenter = Math.abs(r - 2) + Math.abs(c - 2);
+                    const posScore = (4 - distToCenter); // 中央(2,2)=4点, 端=0~2点
+
+                    if (p.player === aiPlayer) score += posScore * 1;
+                    else score -= posScore * 1;
                 }
             }
 
-            if (allMoves.length === 0) {
-                // 動ける場所がない（基本ありえないがパス扱い）
-                currentPlayer = P1;
-                updateStatus();
-                return;
+            // 王様の距離による評価（非常に重要）
+            // 王様はゴール(2,2)に近いほど良い
+            if (aiKingPos) {
+                const dist = Math.abs(aiKingPos.r - 2) + Math.abs(aiKingPos.c - 2);
+                score += (10 - dist) * 10; // 距離が近いほど高得点
+            }
+            if (opKingPos) {
+                const dist = Math.abs(opKingPos.r - 2) + Math.abs(opKingPos.c - 2);
+                score -= (10 - dist) * 10; // 相手が近いほど減点
             }
 
-            // 2. 最善手を選ぶ
-            // 優先度A: 即勝利できる手
-            const winningMoves = allMoves.filter(m => m.isWin);
-            if (winningMoves.length > 0) {
-                const m = winningMoves[0];
-                movePiece(m.fromR, m.fromC, m.toR, m.toC);
-                return;
-            }
-
-            // 優先度B: 王様を動かす手（少し優先的に選ぶことでゲームを進める）
-            // かつ、ゴールに近い（マンハッタン距離が小さくなる）手を評価してもいいが、
-            // ここではシンプルに「王様が動けるなら50%の確率で王様の手を優先」くらいにする
-            const kingMoves = allMoves.filter(m => board[m.fromR][m.fromC].isKing);
-            
-            let selectedMove = null;
-
-            // 50%の確率で王様の移動を優先（ただし自殺手になるリスクまではチェックしていない簡易AI）
-            if (kingMoves.length > 0 && Math.random() < 0.5) {
-                selectedMove = kingMoves[Math.floor(Math.random() * kingMoves.length)];
-            } else {
-                // 完全ランダム
-                selectedMove = allMoves[Math.floor(Math.random() * allMoves.length)];
-            }
-
-            movePiece(selectedMove.fromR, selectedMove.fromC, selectedMove.toR, selectedMove.toC);
+            return score;
         }
 
-        function resetGame() {
-            initGame();
+        // ヘルパー: 勝者チェック
+        function checkWinner(boardState) {
+            const center = boardState[2][2];
+            if (center && center.isKing) {
+                return center.player;
+            }
+            return null;
         }
 
-        // 開始
+        // ヘルパー: 全合法手を取得
+        function getAllMoves(boardState, player) {
+            let moves = [];
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const p = boardState[r][c];
+                    if (p && p.player === player) {
+                        moves = moves.concat(getValidMovesForPiece(boardState, r, c));
+                    }
+                }
+            }
+            // ランダム性を出すためにシャッフル（同点の手がある場合のため）
+            moves.sort(() => Math.random() - 0.5);
+            return moves;
+        }
+
+        // ヘルパー: 盤面コピー
+        function cloneBoard(source) {
+            return source.map(row => row.map(cell => cell ? {...cell} : null));
+        }
+
+        // ヘルパー: 仮想盤面上で移動適用
+        function applyMoveOnBoard(boardState, move) {
+            const piece = boardState[move.fromR][move.fromC];
+            boardState[move.toR][move.toC] = piece;
+            boardState[move.fromR][move.fromC] = null;
+        }
+
+        // 初期化
         initGame();
 
     </script>
