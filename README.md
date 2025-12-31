@@ -33,3 +33,11 @@ AIの待機時間をキャンセルする処理を追加し、正しくリセッ
 https://github.com/nishinojunji/slipelikegame-with-ai/tree/2e8014f208fe8d200c43d7b0c0b153162158e846
 
 治った
+
+## 弱くできるようにした
+
+> 強さを選べるように1-5で
+
+https://github.com/nishinojunji/slipelikegame-with-ai/tree/3411ae7acde509262c0205b12eb131be3fddbfef
+
+しばしば千日手になる
