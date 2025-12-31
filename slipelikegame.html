@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slipe vs Strong AI (Fixed)</title>
+    <title>Slipe vs AI (Levels 1-5)</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -17,21 +17,40 @@
         }
         h1 { color: #333; margin-bottom: 5px; }
         
-        .controls-top {
-            margin-bottom: 15px;
+        /* コントロール周りのレイアウト調整 */
+        .controls-wrapper {
+            background: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
             display: flex;
-            gap: 10px;
+            gap: 15px;
             align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .control-group label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 2px;
+            font-weight: bold;
         }
         select {
-            padding: 8px;
-            font-size: 16px;
+            padding: 6px;
+            font-size: 14px;
             border-radius: 4px;
             border: 1px solid #ccc;
+            cursor: pointer;
         }
 
         #status {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             font-size: 1.2em;
             font-weight: bold;
             color: #555;
@@ -40,7 +59,6 @@
             align-items: center;
             gap: 10px;
         }
-        /* 読み込み中アニメーション */
         .loading {
             display: none;
             width: 20px;
@@ -71,7 +89,6 @@
             justify-content: center;
             align-items: center;
         }
-        /* ゴールマス */
         .cell[data-row="2"][data-col="2"] {
             background-color: #e6c5a1;
             border: 2px solid #dcb58b;
@@ -108,7 +125,6 @@
             transform: scale(1.1);
             z-index: 20;
         }
-        /* AI思考中は操作不能にする */
         .board.ai-thinking .piece,
         .board.ai-thinking .hint {
             cursor: default;
@@ -148,14 +164,26 @@
 </head>
 <body>
 
-    <h1>Slipe vs Strong AI</h1>
+    <h1>Slipe vs AI</h1>
     
-    <div class="controls-top">
-        <label for="modeSelect">モード:</label>
-        <select id="modeSelect" onchange="resetGame()">
-            <option value="ai">1人プレイ (vs CPU)</option>
-            <option value="human">2人プレイ (対人戦)</option>
-        </select>
+    <div class="controls-wrapper">
+        <div class="control-group">
+            <label for="modeSelect">プレイモード</label>
+            <select id="modeSelect" onchange="resetGame()">
+                <option value="ai">1人プレイ (vs CPU)</option>
+                <option value="human">2人プレイ (対人戦)</option>
+            </select>
+        </div>
+        <div class="control-group" id="aiLevelGroup">
+            <label for="aiLevelSelect">AIの強さ</label>
+            <select id="aiLevelSelect" onchange="resetGame()">
+                <option value="1">Lv 1 (最弱 - Random)</option>
+                <option value="2">Lv 2 (弱 - Depth 1)</option>
+                <option value="3">Lv 3 (普通 - Depth 2)</option>
+                <option value="4">Lv 4 (強 - Depth 3)</option>
+                <option value="5" selected>Lv 5 (最強 - Depth 4)</option>
+            </select>
+        </div>
     </div>
 
     <div id="status">
@@ -173,31 +201,40 @@
         const P1 = 1; // 青 (Human)
         const P2 = 2; // 赤 (AI or Human)
         
-        // AIの強さ設定（深さ）。4は強いがスマホだと少し重い場合があるため、
-        // 動作が遅ければ3に変更してください。
-        const MAX_DEPTH = 4; 
-
         let board = [];
         let currentPlayer = P1;
         let selectedPiece = null;
         let isGameOver = false;
         let isAiMode = true;
         let isAiThinking = false;
-        let aiTimer = null; // AIの動作予約タイマー
+        let aiTimer = null;
+        let aiDepth = 4; // デフォルト
 
         const boardEl = document.getElementById('board');
         const statusTextEl = document.getElementById('statusText');
         const aiLoadingEl = document.getElementById('aiLoading');
         const modeSelectEl = document.getElementById('modeSelect');
+        const aiLevelSelectEl = document.getElementById('aiLevelSelect');
+        const aiLevelGroupEl = document.getElementById('aiLevelGroup');
 
         function initGame() {
-            // 既存のAIタイマーがあればキャンセル (リセット不具合の修正)
             if (aiTimer) {
                 clearTimeout(aiTimer);
                 aiTimer = null;
             }
 
             isAiMode = (modeSelectEl.value === 'ai');
+            
+            // AIレベル設定の表示/非表示と反映
+            if (isAiMode) {
+                aiLevelGroupEl.style.display = 'flex';
+                // Level 1: Depth 0 (Random), Level 2: Depth 1, ... Level 5: Depth 4
+                const level = parseInt(aiLevelSelectEl.value, 10);
+                aiDepth = (level === 1) ? 0 : (level - 1);
+            } else {
+                aiLevelGroupEl.style.display = 'none';
+            }
+
             board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
 
             // 初期配置
@@ -220,16 +257,13 @@
             isAiThinking = false;
             selectedPiece = null;
             
-            // クラス削除
             boardEl.classList.remove('ai-thinking');
-            
             updateStatus();
             renderBoard();
         }
 
         function renderBoard() {
             boardEl.innerHTML = ''; 
-
             for (let r = 0; r < BOARD_SIZE; r++) {
                 for (let c = 0; c < BOARD_SIZE; c++) {
                     const cell = document.createElement('div');
@@ -242,22 +276,19 @@
                     if (pieceData) {
                         const piece = document.createElement('div');
                         piece.className = `piece ${pieceData.player === P1 ? 'p1' : 'p2'} ${pieceData.isKing ? 'king' : ''}`;
-                        
                         if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
                             piece.classList.add('selected');
                         }
-
+                        // 配置
                         const top = 10 + r * 65 + 5;
                         const left = 10 + c * 65 + 5;
                         piece.style.top = `${top}px`;
                         piece.style.left = `${left}px`;
-
                         piece.onclick = () => handlePieceClick(r, c);
                         boardEl.appendChild(piece);
                     }
                 }
             }
-
             if (selectedPiece && !isGameOver && !isAiThinking) {
                 showHints(selectedPiece.r, selectedPiece.c);
             }
@@ -265,10 +296,9 @@
 
         function handlePieceClick(r, c) {
             if (isGameOver || isAiThinking) return;
-
             const piece = board[r][c];
             if (!piece || piece.player !== currentPlayer) return;
-            // AIモードでAIターンの場合、クリック無効
+            // AIの手番なら無視
             if (isAiMode && currentPlayer === P2) return;
 
             if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
@@ -296,14 +326,10 @@
         function getValidMovesForPiece(currentBoard, r, c) {
             const directions = [[-1,0], [1,0], [0,-1], [0,1]];
             const moves = [];
-            
             directions.forEach(dir => {
                 const target = getSlideTarget(currentBoard, r, c, dir[0], dir[1]);
                 if (target.r !== r || target.c !== c) {
-                    moves.push({
-                        fromR: r, fromC: c,
-                        toR: target.r, toC: target.c
-                    });
+                    moves.push({ fromR: r, fromC: c, toR: target.r, toC: target.c });
                 }
             });
             return moves;
@@ -325,12 +351,10 @@
 
         function performMove(fromR, fromC, toR, toC) {
             const piece = board[fromR][fromC];
-            
             board[toR][toC] = piece;
             board[fromR][fromC] = null;
             selectedPiece = null;
 
-            // 勝利判定
             if (piece.isKing && toR === 2 && toC === 2) {
                 renderBoard();
                 isGameOver = true;
@@ -341,15 +365,11 @@
                 return;
             }
 
-            // ターン交代
             currentPlayer = currentPlayer === P1 ? P2 : P1;
             renderBoard();
             updateStatus();
 
-            // AIのターン発動
             if (isAiMode && currentPlayer === P2 && !isGameOver) {
-                // タイマーで少し遅延させてAI思考開始 (UIブロック回避と演出)
-                // タイマーIDを保存してリセット時にキャンセルできるようにする
                 aiTimer = setTimeout(startAiTurn, 100);
             }
         }
@@ -357,7 +377,8 @@
         function updateStatus() {
             if (isGameOver) return;
             const isAiTurn = (isAiMode && currentPlayer === P2);
-            const pName = currentPlayer === P1 ? "Player 1 (Blue)" : (isAiMode ? "CPU (Red)" : "Player 2 (Red)");
+            const levelLabel = isAiMode ? ` (Lv${aiLevelSelectEl.value})` : "";
+            const pName = currentPlayer === P1 ? "Player 1 (Blue)" : (isAiMode ? `CPU${levelLabel}` : "Player 2 (Red)");
             
             statusTextEl.innerText = `${pName} のターン`;
             statusTextEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
@@ -374,16 +395,23 @@
         }
 
         // ==========================================
-        //  AI Logic (Minimax with Alpha-Beta Pruning)
+        //  AI Logic
         // ==========================================
 
         function startAiTurn() {
-            // リセット直後やゲーム終了後に呼ばれた場合のガード
             if (!isAiMode || currentPlayer !== P2 || isGameOver) return;
 
-            // setTimeout内で処理を分けることで描画更新を挟む
             setTimeout(() => {
-                const bestMove = getBestMove(board, P2);
+                let bestMove = null;
+                
+                // Lv1 (aiDepth=0) の場合はランダム処理
+                if (aiDepth === 0) {
+                    bestMove = getRandomMoveWithWinCheck(board, P2);
+                } else {
+                    // Lv2以上はMinimax
+                    const result = minimax(board, aiDepth, -Infinity, Infinity, true, P2);
+                    bestMove = result.move;
+                }
                 
                 // 思考中にリセットされた場合のガード
                 if (!isAiMode || currentPlayer !== P2 || isGameOver) return;
@@ -391,17 +419,26 @@
                 if (bestMove) {
                     performMove(bestMove.fromR, bestMove.fromC, bestMove.toR, bestMove.toC);
                 } else {
-                    // 万が一手がない場合 (パス)
                     currentPlayer = P1;
                     updateStatus();
                 }
             }, 50);
         }
 
-        function getBestMove(currentBoard, player) {
-            const depth = MAX_DEPTH; 
-            const result = minimax(currentBoard, depth, -Infinity, Infinity, true, player);
-            return result.move;
+        // Lv1用: ランダムだが、即勝利できるならする
+        function getRandomMoveWithWinCheck(boardState, player) {
+            const allMoves = getAllMoves(boardState, player);
+            if (allMoves.length === 0) return null;
+
+            // 勝利手があればそれを選択
+            for (let move of allMoves) {
+                const p = boardState[move.fromR][move.fromC];
+                if (p.isKing && move.toR === 2 && move.toC === 2) {
+                    return move;
+                }
+            }
+            // なければランダム
+            return allMoves[Math.floor(Math.random() * allMoves.length)];
         }
 
         function minimax(boardState, depth, alpha, beta, isMaximizing, aiPlayer) {
@@ -409,7 +446,7 @@
             
             const winner = checkWinner(boardState);
             if (winner !== null) {
-                // 深さが浅い(早いターン数で勝つ)ほど高評価
+                // 浅い深度(早いターン)での勝利ほど高得点
                 if (winner === aiPlayer) return { score: 10000 + depth };
                 if (winner === opponent) return { score: -10000 - depth };
             }
@@ -432,9 +469,7 @@
                 for (let move of allMoves) {
                     const nextBoard = cloneBoard(boardState);
                     applyMoveOnBoard(nextBoard, move);
-
                     const evalResult = minimax(nextBoard, depth - 1, alpha, beta, false, aiPlayer);
-                    
                     if (evalResult.score > maxEval) {
                         maxEval = evalResult.score;
                         bestMove = move;
@@ -448,9 +483,7 @@
                 for (let move of allMoves) {
                     const nextBoard = cloneBoard(boardState);
                     applyMoveOnBoard(nextBoard, move);
-
                     const evalResult = minimax(nextBoard, depth - 1, alpha, beta, true, aiPlayer);
-                    
                     if (evalResult.score < minEval) {
                         minEval = evalResult.score;
                         bestMove = move;
@@ -477,17 +510,15 @@
                         if (p.player === aiPlayer) aiKingPos = {r, c};
                         else opKingPos = {r, c};
                     }
-
-                    // 中央付近の支配
+                    // 中央支配ボーナス
                     const distToCenter = Math.abs(r - 2) + Math.abs(c - 2);
                     const posScore = (4 - distToCenter); 
-
                     if (p.player === aiPlayer) score += posScore * 2;
                     else score -= posScore * 2;
                 }
             }
 
-            // 王様とゴールの距離 (最重要)
+            // 王様とゴールの距離
             if (aiKingPos) {
                 const dist = Math.abs(aiKingPos.r - 2) + Math.abs(aiKingPos.c - 2);
                 score += (10 - dist) * 20; 
@@ -518,7 +549,6 @@
                     }
                 }
             }
-            // ランダム性 (同点の場合のバラつき)
             moves.sort(() => Math.random() - 0.5);
             return moves;
         }
@@ -537,9 +567,7 @@
             initGame();
         }
 
-        // 開始
         initGame();
-
     </script>
 </body>
 </html>
