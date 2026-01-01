@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Slipe vs AI (Levels 1-5)</title>
+    <title>Slipe vs AI (Anti-Camping Rule)</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -17,13 +17,12 @@
         }
         h1 { color: #333; margin-bottom: 5px; }
         
-        /* コントロール周りのレイアウト調整 */
         .controls-wrapper {
             background: #fff;
             padding: 10px 20px;
             border-radius: 8px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             display: flex;
             gap: 15px;
             align-items: center;
@@ -49,16 +48,28 @@
             cursor: pointer;
         }
 
-        #status {
+        #status-area {
+            text-align: center;
             margin-bottom: 15px;
+            height: 3.5em; /* 警告文などのスペース確保 */
+        }
+        #status {
             font-size: 1.2em;
             font-weight: bold;
             color: #555;
-            height: 1.5em;
             display: flex;
+            justify-content: center;
             align-items: center;
             gap: 10px;
+            margin-bottom: 5px;
         }
+        #warning {
+            color: #e74c3c;
+            font-weight: bold;
+            font-size: 0.9em;
+            height: 1.2em;
+        }
+
         .loading {
             display: none;
             width: 20px;
@@ -164,7 +175,7 @@
 </head>
 <body>
 
-    <h1>Slipe vs AI</h1>
+    <h1>Slipe (Anti-Camping)</h1>
     
     <div class="controls-wrapper">
         <div class="control-group">
@@ -177,18 +188,21 @@
         <div class="control-group" id="aiLevelGroup">
             <label for="aiLevelSelect">AIの強さ</label>
             <select id="aiLevelSelect" onchange="resetGame()">
-                <option value="1">Lv 1 (最弱 - Random)</option>
-                <option value="2">Lv 2 (弱 - Depth 1)</option>
-                <option value="3">Lv 3 (普通 - Depth 2)</option>
-                <option value="4">Lv 4 (強 - Depth 3)</option>
-                <option value="5" selected>Lv 5 (最強 - Depth 4)</option>
+                <option value="1">Lv 1 (最弱)</option>
+                <option value="2">Lv 2 (弱)</option>
+                <option value="3">Lv 3 (普通)</option>
+                <option value="4">Lv 4 (強)</option>
+                <option value="5" selected>Lv 5 (最強)</option>
             </select>
         </div>
     </div>
 
-    <div id="status">
-        <span id="statusText">Player 1 (Blue) のターン</span>
-        <div class="loading" id="aiLoading"></div>
+    <div id="status-area">
+        <div id="status">
+            <span id="statusText">Player 1 (Blue) のターン</span>
+            <div class="loading" id="aiLoading"></div>
+        </div>
+        <div id="warning"></div>
     </div>
     
     <div class="board" id="board">
@@ -208,10 +222,15 @@
         let isAiMode = true;
         let isAiThinking = false;
         let aiTimer = null;
-        let aiDepth = 4; // デフォルト
+        let aiDepth = 4;
+
+        // 反則負けルールのための変数
+        // 誰が(player)、何ターン連続で(count)、中央に居座っているか
+        let campingState = { player: null, count: 0 };
 
         const boardEl = document.getElementById('board');
         const statusTextEl = document.getElementById('statusText');
+        const warningEl = document.getElementById('warning');
         const aiLoadingEl = document.getElementById('aiLoading');
         const modeSelectEl = document.getElementById('modeSelect');
         const aiLevelSelectEl = document.getElementById('aiLevelSelect');
@@ -225,10 +244,8 @@
 
             isAiMode = (modeSelectEl.value === 'ai');
             
-            // AIレベル設定の表示/非表示と反映
             if (isAiMode) {
                 aiLevelGroupEl.style.display = 'flex';
-                // Level 1: Depth 0 (Random), Level 2: Depth 1, ... Level 5: Depth 4
                 const level = parseInt(aiLevelSelectEl.value, 10);
                 aiDepth = (level === 1) ? 0 : (level - 1);
             } else {
@@ -256,6 +273,7 @@
             isGameOver = false;
             isAiThinking = false;
             selectedPiece = null;
+            campingState = { player: null, count: 0 };
             
             boardEl.classList.remove('ai-thinking');
             updateStatus();
@@ -279,7 +297,6 @@
                         if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
                             piece.classList.add('selected');
                         }
-                        // 配置
                         const top = 10 + r * 65 + 5;
                         const left = 10 + c * 65 + 5;
                         piece.style.top = `${top}px`;
@@ -298,7 +315,6 @@
             if (isGameOver || isAiThinking) return;
             const piece = board[r][c];
             if (!piece || piece.player !== currentPlayer) return;
-            // AIの手番なら無視
             if (isAiMode && currentPlayer === P2) return;
 
             if (selectedPiece && selectedPiece.r === r && selectedPiece.c === c) {
@@ -355,14 +371,46 @@
             board[fromR][fromC] = null;
             selectedPiece = null;
 
+            // 1. 通常勝利判定（王様がゴール）
             if (piece.isKing && toR === 2 && toC === 2) {
                 renderBoard();
-                isGameOver = true;
-                const pName = currentPlayer === P1 ? "Player 1 (Blue)" : "Player 2 (Red)";
-                statusTextEl.innerText = `GAME SET! ${pName} WINS!`;
-                statusTextEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
-                aiLoadingEl.style.display = 'none';
+                endGame(currentPlayer, "GOAL!");
                 return;
+            }
+
+            // 2. 居座り（キャンピング）反則判定チェック
+            // ターン終了時に中央に誰がいるか確認
+            const centerPiece = board[2][2];
+            
+            // 現在のプレイヤーが中央に「王様以外」を置いている場合
+            if (centerPiece && !centerPiece.isKing && centerPiece.player === currentPlayer) {
+                // 自分が以前から占有していたか？
+                if (campingState.player === currentPlayer) {
+                    campingState.count++;
+                } else {
+                    // 新しく占有開始
+                    campingState.player = currentPlayer;
+                    campingState.count = 1;
+                }
+
+                // 2ターン連続終了でアウト (1回目は警告、2回目で負け)
+                if (campingState.count >= 2) {
+                    renderBoard();
+                    // 相手の勝ち
+                    const winner = currentPlayer === P1 ? P2 : P1;
+                    endGame(winner, "FOUL! (Camping)");
+                    return;
+                }
+            } else {
+                // 中央が空いた、王様がいる、または相手がいる（ありえないが）場合
+                // このプレイヤーのカウントはリセット
+                // ただし、相手のターン中に「自分がどかない」ことでカウントが増えるわけではない
+                // カウントが増えるのは「自分のターン終了時」のみ。
+                // 自分が中央にいなければカウントリセット
+                if (campingState.player === currentPlayer) {
+                    campingState.player = null;
+                    campingState.count = 0;
+                }
             }
 
             currentPlayer = currentPlayer === P1 ? P2 : P1;
@@ -374,6 +422,15 @@
             }
         }
 
+        function endGame(winner, reason) {
+            isGameOver = true;
+            const pName = winner === P1 ? "Player 1 (Blue)" : "Player 2 (Red)";
+            statusTextEl.innerText = `${reason} ${pName} WINS!`;
+            statusTextEl.className = winner === P1 ? 'winner-p1' : 'winner-p2';
+            warningEl.innerText = "";
+            aiLoadingEl.style.display = 'none';
+        }
+
         function updateStatus() {
             if (isGameOver) return;
             const isAiTurn = (isAiMode && currentPlayer === P2);
@@ -383,6 +440,13 @@
             statusTextEl.innerText = `${pName} のターン`;
             statusTextEl.className = currentPlayer === P1 ? 'winner-p1' : 'winner-p2';
             
+            // 警告表示
+            if (campingState.player === currentPlayer && campingState.count === 1) {
+                warningEl.innerText = "⚠ 警告: 次のターンで中央から移動しないと反則負けになります！";
+            } else {
+                warningEl.innerText = "";
+            }
+
             if (isAiTurn) {
                 aiLoadingEl.style.display = 'block';
                 boardEl.classList.add('ai-thinking');
@@ -403,50 +467,71 @@
 
             setTimeout(() => {
                 let bestMove = null;
-                
-                // Lv1 (aiDepth=0) の場合はランダム処理
                 if (aiDepth === 0) {
                     bestMove = getRandomMoveWithWinCheck(board, P2);
                 } else {
-                    // Lv2以上はMinimax
-                    const result = minimax(board, aiDepth, -Infinity, Infinity, true, P2);
-                    bestMove = result.move;
+                    bestMove = getBestMoveMinimax(board, P2);
                 }
                 
-                // 思考中にリセットされた場合のガード
                 if (!isAiMode || currentPlayer !== P2 || isGameOver) return;
 
                 if (bestMove) {
                     performMove(bestMove.fromR, bestMove.fromC, bestMove.toR, bestMove.toC);
                 } else {
+                    // パス（実質負け）
                     currentPlayer = P1;
                     updateStatus();
                 }
             }, 50);
         }
 
-        // Lv1用: ランダムだが、即勝利できるならする
         function getRandomMoveWithWinCheck(boardState, player) {
             const allMoves = getAllMoves(boardState, player);
             if (allMoves.length === 0) return null;
 
-            // 勝利手があればそれを選択
+            // 1. 勝利手チェック
             for (let move of allMoves) {
                 const p = boardState[move.fromR][move.fromC];
-                if (p.isKing && move.toR === 2 && move.toC === 2) {
-                    return move;
-                }
+                if (p.isKing && move.toR === 2 && move.toC === 2) return move;
             }
-            // なければランダム
+            // 2. 反則負け回避チェック（中央にいて、動かない手は選ばない）
+            // ランダムAIでも最低限「自殺手」は避けるようにする
+            const safeMoves = allMoves.filter(move => {
+                // 移動後の盤面を想定
+                // もし自分が今「中央でstreak=1」なら、中央に留まる手はNG
+                if (campingState.player === player && campingState.count === 1) {
+                    // 中央(2,2)から、中央以外へ行く必要がある
+                    // しかしSlipeの移動ルール上、(2,2)にあるコマを動かせば必ず(2,2)からは居なくなる。
+                    // 問題は「他のコマを動かして、(2,2)のコマを放置する」こと。
+                    // 自分が動かすコマが(2,2)のコマでない場合、(2,2)はそのまま -> NG
+                    if (move.fromR !== 2 || move.fromC !== 2) return false;
+                }
+                
+                // また、新しく中央に入る場合も、次のターン動けなくなるリスクはあるが、即死ではないのでOK。
+                // ただし、AI（ランダム）が中央に入って詰むのを避けるため、王様以外で中央に入るのを少し嫌うロジックを入れてもいいが、
+                // Lv1なのでそこまではしない。
+                return true;
+            });
+
+            if (safeMoves.length > 0) {
+                return safeMoves[Math.floor(Math.random() * safeMoves.length)];
+            }
+            // どうしようもない場合
             return allMoves[Math.floor(Math.random() * allMoves.length)];
+        }
+
+        function getBestMoveMinimax(currentBoard, player) {
+            const result = minimax(currentBoard, aiDepth, -Infinity, Infinity, true, player);
+            return result.move;
         }
 
         function minimax(boardState, depth, alpha, beta, isMaximizing, aiPlayer) {
             const opponent = aiPlayer === P1 ? P2 : P1;
             
+            // 勝敗判定（静的評価に組み込む）
+            // 王様ゴールチェック
             const winner = checkWinner(boardState);
             if (winner !== null) {
-                // 浅い深度(早いターン)での勝利ほど高得点
                 if (winner === aiPlayer) return { score: 10000 + depth };
                 if (winner === opponent) return { score: -10000 - depth };
             }
@@ -464,9 +549,28 @@
 
             let bestMove = null;
 
+            // ★キャンピング対策★
+            // Minimaxの再帰内で「streak状態」を正確にシミュレートするのは複雑（状態引数が増える）。
+            // そのため、「現在のリアルなstreak」だけを参照し、
+            // 「今まさに警告を受けているなら、中央のコマを動かす手を最優先（それ以外は自殺手として除外）」するフィルタリングを行う。
+            // 未来のシミュレーション（depth-1以下）では、
+            // 「王様以外を中央に止めること」自体に巨大なペナルティを与えることで、
+            // AIが「将来的に中央に居座るような状況」を作らないようにする。
+            
+            let filteredMoves = allMoves;
+            // トップレベル（現在の盤面）かつ、自分が操作する場合
+            if (depth === aiDepth && currentPlayerForNode === aiPlayer) {
+                 if (campingState.player === aiPlayer && campingState.count === 1) {
+                    // 警告中！中央(2,2)にあるコマを動かさなければ即死。
+                    // (2,2)にあるコマを動かす手だけを残す。
+                    filteredMoves = allMoves.filter(m => m.fromR === 2 && m.fromC === 2);
+                    // 万が一動ける場所がない（詰んでいる）場合は空になる -> そのまま負けを受け入れる
+                 }
+            }
+
             if (isMaximizing) {
                 let maxEval = -Infinity;
-                for (let move of allMoves) {
+                for (let move of filteredMoves) {
                     const nextBoard = cloneBoard(boardState);
                     applyMoveOnBoard(nextBoard, move);
                     const evalResult = minimax(nextBoard, depth - 1, alpha, beta, false, aiPlayer);
@@ -480,7 +584,7 @@
                 return { score: maxEval, move: bestMove };
             } else {
                 let minEval = Infinity;
-                for (let move of allMoves) {
+                for (let move of filteredMoves) {
                     const nextBoard = cloneBoard(boardState);
                     applyMoveOnBoard(nextBoard, move);
                     const evalResult = minimax(nextBoard, depth - 1, alpha, beta, true, aiPlayer);
@@ -509,8 +613,23 @@
                     if (p.isKing) {
                         if (p.player === aiPlayer) aiKingPos = {r, c};
                         else opKingPos = {r, c};
+                    } else {
+                        // ★AIキャンピング回避ロジック★
+                        // 王様以外のコマが中央(2,2)にある場合、ペナルティを与える。
+                        // これにより、AIは「中央に止まる手」を極端に嫌うようになる。
+                        // 1ターンは許されるルールだが、安全策として「絶対止まらない」方針にする。
+                        if (r === 2 && c === 2) {
+                            if (p.player === aiPlayer) {
+                                score -= 9000; // ほぼ負けに等しいペナルティ
+                            } else {
+                                // 相手が中央にいるのは、相手がミスしたかブロックしている状態。
+                                // 特に対処不要だが、相手がそこにいる＝自分が入れない、ので
+                                // 評価としてはフラットで良い。
+                            }
+                        }
                     }
-                    // 中央支配ボーナス
+
+                    // 中央付近の支配（通常評価）
                     const distToCenter = Math.abs(r - 2) + Math.abs(c - 2);
                     const posScore = (4 - distToCenter); 
                     if (p.player === aiPlayer) score += posScore * 2;
@@ -518,7 +637,6 @@
                 }
             }
 
-            // 王様とゴールの距離
             if (aiKingPos) {
                 const dist = Math.abs(aiKingPos.r - 2) + Math.abs(aiKingPos.c - 2);
                 score += (10 - dist) * 20; 
